@@ -10,7 +10,13 @@ import {
 
 import DashboardPage from "./pages/DashboardPage";
 import TenantsPage from "./pages/TenantsPage";
+import TenantDetailsPage from "./pages/TenantDetailsPage";
+import GlobalLogsPage from "./pages/GlobalLogsPage";
+import ApiStatusPage from "./pages/ApiStatusPage";
+import DemoRequestsPage from "./pages/DemoRequestsPage";
+import PlatformSettingsPage from "./pages/PlatformSettingsPage";
 import PanelLoginPage from "./pages/PanelLoginPage";
+import ModulesPage from "./pages/ModulesPage";
 import { isPanelAuthed } from "./auth/panelSession";
 
 const PanelProtectedRoute: React.FC<{ children: React.ReactElement }> = ({
@@ -29,7 +35,7 @@ const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const title = onTenants ? "Тенанты" : "Обзор платформы";
   const subtitle = onTenants
     ? "Список всех компаний, статусы, планы и управление доступом."
-    : "pl1.lumiva.agency — панель управления компаниями и доступами.";
+    : "Панель управления компаниями и доступами.";
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-50 flex">
@@ -44,7 +50,7 @@ const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               Lumiva Platform
             </span>
             <span className="text-[11px] text-slate-500">
-              pl1 · tenants panel
+              Панель управления
             </span>
           </div>
         </div>
@@ -79,6 +85,81 @@ const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           >
             <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
             <span>Тенанты</span>
+          </NavLink>
+
+          <NavLink
+            to="/modules"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2 rounded-xl px-3 py-2 transition-colors",
+                isActive
+                  ? "bg-slate-800 text-slate-50"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-50",
+              ].join(" ")
+            }
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+            <span>Модули</span>
+          </NavLink>
+
+          <NavLink
+            to="/logs"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2 rounded-xl px-3 py-2 transition-colors",
+                isActive
+                  ? "bg-slate-800 text-slate-50"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-50",
+              ].join(" ")
+            }
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span>Логи</span>
+          </NavLink>
+
+          <NavLink
+            to="/apis"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2 rounded-xl px-3 py-2 transition-colors",
+                isActive
+                  ? "bg-slate-800 text-slate-50"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-50",
+              ].join(" ")
+            }
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            <span>API</span>
+          </NavLink>
+
+          <NavLink
+            to="/requests"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2 rounded-xl px-3 py-2 transition-colors",
+                isActive
+                  ? "bg-slate-800 text-slate-50"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-50",
+              ].join(" ")
+            }
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
+            <span>Запросы</span>
+          </NavLink>
+
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2 rounded-xl px-3 py-2 transition-colors",
+                isActive
+                  ? "bg-slate-800 text-slate-50"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-50",
+              ].join(" ")
+            }
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+            <span>Настройки</span>
           </NavLink>
         </nav>
 
@@ -145,6 +226,54 @@ const App: React.FC = () => {
           element={
             <PanelProtectedRoute>
               <TenantsPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:id"
+          element={
+            <PanelProtectedRoute>
+              <TenantDetailsPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/modules"
+          element={
+            <PanelProtectedRoute>
+              <ModulesPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/logs"
+          element={
+            <PanelProtectedRoute>
+              <GlobalLogsPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/apis"
+          element={
+            <PanelProtectedRoute>
+              <ApiStatusPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/requests"
+          element={
+            <PanelProtectedRoute>
+              <DemoRequestsPage />
+            </PanelProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <PanelProtectedRoute>
+              <PlatformSettingsPage />
             </PanelProtectedRoute>
           }
         />

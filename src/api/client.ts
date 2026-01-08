@@ -1,15 +1,42 @@
 // src/api/client.ts
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
+import { getPanelToken } from "../auth/panelSession";
 
 const baseURL =
   import.meta.env.VITE_PLATFORM_API_URL?.trim() ||
-  "/pl1-platform-api"; // можно потом изменить/убрать, если делаешь прокси через nginx
+  "https://crm.lumiva.agency/v1";
 
 export const apiClient = axios.create({
   baseURL,
   timeout: 15000,
   withCredentials: false,
 });
+
+// Добавляем токен аутентификации в заголовки
+apiClient.interceptors.request.use(
+  (config) => {
+    // Не добавляем токен для запросов на логин
+    if (config.url?.includes('/platform/auth/login')) {
+      return config;
+    }
+    
+    const token = getPanelToken();
+    if (token) {
+      if (!config.headers) {
+        config.headers = new AxiosHeaders();
+      }
+      if (typeof (config.headers as AxiosHeaders).set === "function") {
+        (config.headers as AxiosHeaders).set("Authorization", `Bearer ${token}`);
+      } else {
+        (config.headers as any).Authorization = `Bearer ${token}`;
+      }
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 // Простой лог + прокидка ошибки дальше
 apiClient.interceptors.response.use(
@@ -18,6 +45,8 @@ apiClient.interceptors.response.use(
     if (import.meta.env.DEV) {
       console.error("API error:", error);
     }
+    // Не перенаправляем автоматически - пусть компоненты сами решают, что делать
+    // Только логируем ошибку
     return Promise.reject(error);
   }
 );

@@ -1,4 +1,7 @@
 /* src/index.css */
+/* наш кастомный стиль панели */
+@import "./pl1.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -20,6 +23,3 @@ body {
 #root {
   min-height: 100vh;
 }
-
-/* наш кастомный стиль панели */
-@import "./pl1.css";

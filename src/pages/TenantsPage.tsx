@@ -13,7 +13,7 @@ import {
 } from "../api/tenants";
 import { getApiErrorMessage } from "../api/client";
 const PLATFORM_API_BASE =
-  import.meta.env.VITE_PLATFORM_API_URL || "/pl1-platform-api";
+  import.meta.env.VITE_PLATFORM_API_URL || "https://crm.lumiva.agency/v1";
 
 type StatusFilter = "all" | "active" | "blocked";
 type PlanFilter = "all" | "basic" | "pro";
@@ -27,6 +27,7 @@ interface EditTenantForm {
   ownerName: string;
   ownerEmail: string;
   apiEnabled: boolean;
+  notes: string;
 }
 
 interface CreateTenantForm {
@@ -53,6 +54,18 @@ const TenantsPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [planFilter, setPlanFilter] = useState<PlanFilter>("all");
+  const [expiringOnly, setExpiringOnly] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [savedFilters, setSavedFilters] = useState<
+    {
+      name: string;
+      search: string;
+      status: StatusFilter;
+      plan: PlanFilter;
+      expiringOnly: boolean;
+    }[]
+  >([]);
 
   // ---------- создание ----------
   const [createOpen, setCreateOpen] = useState(false);
@@ -71,6 +84,13 @@ const TenantsPage: React.FC = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<EditTenantForm | null>(null);
   const [editLoading, setEditLoading] = useState(false);
+
+  // ---------- импорт CSV ----------
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [auditToast, setAuditToast] = useState<string | null>(null);
 
   // ---------- загрузка ----------
   const loadTenants = async () => {
@@ -91,8 +111,35 @@ const TenantsPage: React.FC = () => {
     void loadTenants();
   }, []);
 
+  // ---------- сохранённые фильтры ----------
+  const FILTERS_KEY = "pl1_tenants_filters";
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FILTERS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setSavedFilters(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify(savedFilters));
+    } catch {
+      // ignore
+    }
+  }, [savedFilters]);
+
   // ---------- фильтрация ----------
   const filteredTenants = useMemo(() => {
+    const now = new Date();
+    const expiringThreshold = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
     return tenants.filter((t) => {
       if (search) {
         const q = search.toLowerCase();
@@ -107,9 +154,16 @@ const TenantsPage: React.FC = () => {
       if (planFilter !== "all" && (t.plan || "basic") !== planFilter) {
         return false;
       }
+
+      if (expiringOnly) {
+        if (!t.activeUntil) return false;
+        const end = new Date(t.activeUntil);
+        if (Number.isNaN(end.getTime())) return false;
+        if (end < now || end > expiringThreshold) return false;
+      }
       return true;
     });
-  }, [tenants, search, statusFilter, planFilter]);
+  }, [tenants, search, statusFilter, planFilter, expiringOnly]);
 
   // ---------- действия со статусом / API ----------
   const toggleStatus = async (tenant: TenantSummary) => {
@@ -229,6 +283,7 @@ const TenantsPage: React.FC = () => {
       ownerName: t.ownerName ?? "",
       ownerEmail: t.ownerEmail ?? "",
       apiEnabled: t.apiEnabled,
+      notes: t.notes ?? "",
     });
     setEditOpen(true);
   };
@@ -248,6 +303,7 @@ const TenantsPage: React.FC = () => {
         ownerName: editForm.ownerName.trim() || null,
         ownerEmail: editForm.ownerEmail.trim() || null,
         apiEnabled: editForm.apiEnabled,
+        notes: editForm.notes.trim() || null,
       };
 
       const updated = await updateTenant(editForm.id, dto);
@@ -270,6 +326,241 @@ const TenantsPage: React.FC = () => {
     return d.toLocaleDateString("ru-RU");
   };
 
+  const daysToExpire = (iso?: string | null) => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    const diff = d.getTime() - Date.now();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  };
+
+  const exportCsv = () => {
+    const rows = filteredTenants.map((t) => ({
+      name: t.name,
+      clientKey: t.clientKey,
+      status: t.status,
+      plan: t.plan ?? "",
+      apiEnabled: t.apiEnabled ? "on" : "off",
+      activeUntil: t.activeUntil ?? "",
+      ownerName: t.ownerName ?? "",
+      ownerEmail: t.ownerEmail ?? "",
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    }));
+
+    const headers = [
+      "name",
+      "clientKey",
+      "status",
+      "plan",
+      "apiEnabled",
+      "activeUntil",
+      "ownerName",
+      "ownerEmail",
+      "createdAt",
+      "updatedAt",
+    ];
+
+    const csv = [
+      headers.join(","),
+      ...rows.map((row) =>
+        headers
+          .map((key) => {
+            const value = (row as any)[key] ?? "";
+            const safe = String(value).replace(/"/g, '""');
+            return `"${safe}"`;
+          })
+          .join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    link.download = `tenants-${yyyy}${mm}${dd}.csv`;
+
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const saveCurrentFilter = () => {
+    const name =
+      window.prompt("Название фильтра", `Фильтр ${new Date().toLocaleDateString("ru-RU")}`)?.trim() ||
+      "";
+    if (!name) return;
+
+    setSavedFilters((prev) => {
+      const rest = prev.filter((f) => f.name !== name);
+      return [
+        ...rest,
+        {
+          name,
+          search,
+          status: statusFilter,
+          plan: planFilter,
+          expiringOnly,
+        },
+      ];
+    });
+  };
+
+  const applySavedFilter = (name: string) => {
+    const f = savedFilters.find((sf) => sf.name === name);
+    if (!f) return;
+    setSearch(f.search);
+    setStatusFilter(f.status);
+    setPlanFilter(f.plan);
+    setExpiringOnly(f.expiringOnly);
+  };
+
+  const deleteSavedFilter = (name: string) => {
+    setSavedFilters((prev) => prev.filter((f) => f.name !== name));
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const allIds = filteredTenants.map((t) => t.id);
+      const next = new Set(prev);
+      const allSelected = allIds.every((id) => next.has(id));
+      if (allSelected) {
+        allIds.forEach((id) => next.delete(id));
+      } else {
+        allIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const applyBatch = async (
+    action: "activate" | "block" | "api-on" | "api-off" | TenantPlan,
+  ) => {
+    if (selectedIds.size === 0) return;
+    setBatchLoading(true);
+    try {
+      const ids = Array.from(selectedIds);
+      await Promise.all(
+        ids.map((id) => {
+          switch (action) {
+            case "activate":
+              return updateTenant(id, { status: "active" });
+            case "block":
+              return updateTenant(id, { status: "blocked" });
+            case "api-on":
+              return updateTenant(id, { apiEnabled: true });
+            case "api-off":
+              return updateTenant(id, { apiEnabled: false });
+            default:
+              return updateTenant(id, { plan: action as TenantPlan });
+          }
+        })
+      );
+
+      const applied = ids.length;
+      const actionLabel =
+        action === "activate"
+          ? "Разблокировано"
+          : action === "block"
+            ? "Заблокировано"
+            : action === "api-on"
+              ? "API включено"
+              : action === "api-off"
+                ? "API выключено"
+                : `План ${action}`;
+
+      setTenants((prev) =>
+        prev.map((t) => {
+          if (!selectedIds.has(t.id)) return t;
+          if (action === "activate") return { ...t, status: "active" };
+          if (action === "block") return { ...t, status: "blocked" };
+          if (action === "api-on") return { ...t, apiEnabled: true };
+          if (action === "api-off") return { ...t, apiEnabled: false };
+          return { ...t, plan: action as TenantPlan };
+        })
+      );
+      setSelectedIds(new Set());
+      setAuditToast(`${actionLabel}: ${applied} шт.`);
+    } catch (err) {
+      alert("Не удалось применить массовое действие: " + getApiErrorMessage(err));
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importText.trim()) return;
+    setImportLoading(true);
+    setImportResult(null);
+    try {
+      const lines = importText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (lines.length === 0) {
+        setImportResult("Нет данных");
+        return;
+      }
+
+      const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+      const rows = lines.slice(1);
+      const created: TenantSummary[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const cols = rows[i].split(",").map((c) => c.replace(/^"|"$/g, "").trim());
+        const row: Record<string, string> = {};
+        header.forEach((h, idx) => {
+          row[h] = cols[idx] ?? "";
+        });
+        const name = row.name;
+        const clientKey = row.clientkey || row.client_key || "";
+        const plan = (row.plan || "basic") as TenantPlan;
+        const ownerEmail = row.owneremail || row.owner_email || "";
+        if (!name || !clientKey || !ownerEmail) {
+          errors.push(`Строка ${i + 2}: name/clientKey/ownerEmail обязательны`);
+          continue;
+        }
+        try {
+          const dto: CreateTenantDto = {
+            name,
+            clientKey,
+            plan,
+          };
+          // backend ожидает ownerEmail в другом поле? createTenant принимает CreateTenantDto,
+          // но у нас платформа может требовать ownerEmail. Пока кладём в notes для ориентира.
+          const createdTenant = await createTenant(dto as any);
+          created.push(createdTenant);
+        } catch (err) {
+          errors.push(`Строка ${i + 2}: ${getApiErrorMessage(err)}`);
+        }
+      }
+
+      if (created.length > 0) {
+        setTenants((prev) => [...created, ...prev]);
+      }
+
+      setImportResult(
+        `Импорт завершён. Создано: ${created.length}. Ошибок: ${errors.length}${errors.length ? ` (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? " …" : ""})` : ""}`,
+      );
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   // ---------- JSX ----------
   return (
     <div className="pl1-page">
@@ -288,6 +579,21 @@ const TenantsPage: React.FC = () => {
             disabled={loading}
           >
             {loading ? "Обновляем…" : "Обновить"}
+          </button>
+          <button
+            type="button"
+            className="pl1-btn-outline"
+            onClick={exportCsv}
+            disabled={filteredTenants.length === 0}
+          >
+            Экспорт CSV
+          </button>
+          <button
+            type="button"
+            className="pl1-btn-outline"
+            onClick={() => setImportOpen(true)}
+          >
+            Импорт CSV
           </button>
           <button
             type="button"
@@ -334,19 +640,144 @@ const TenantsPage: React.FC = () => {
             <option value="basic">basic</option>
             <option value="pro">pro</option>
           </select>
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={expiringOnly}
+              onChange={(e) => setExpiringOnly(e.target.checked)}
+            />
+            Истекает ≤ 14 дней
+          </label>
+          <div className="flex items-center gap-2">
+            <select
+              className="pl1-select"
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "__none__") return;
+                applySavedFilter(val);
+              }}
+              defaultValue="__none__"
+            >
+              <option value="__none__">Сохранённые фильтры</option>
+              {savedFilters.map((f) => (
+                <option key={f.name} value={f.name}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={saveCurrentFilter}
+            >
+              Сохранить фильтр
+            </button>
+            {savedFilters.length > 0 && (
+              <button
+                type="button"
+                className="pl1-btn-ghost"
+                onClick={() => {
+                  const name = window.prompt(
+                    "Удалить фильтр (введите название)",
+                  );
+                  if (name) deleteSavedFilter(name.trim());
+                }}
+              >
+                Удалить
+              </button>
+            )}
+          </div>
         </div>
       </section>
 
       <div className="pl1-card pl1-card-table">
+        {auditToast && (
+          <div className="px-4 py-2 text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/40 rounded-xl mb-2">
+            {auditToast}
+            <button
+              type="button"
+              className="pl1-link-button ml-3"
+              onClick={() => setAuditToast(null)}
+            >
+              Закрыть
+            </button>
+          </div>
+        )}
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-sm text-slate-200">
+            <span className="rounded-full bg-slate-800/80 px-3 py-1 text-xs text-slate-200">
+              Выбрано: {selectedIds.size}
+            </span>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("activate")}
+              disabled={batchLoading}
+            >
+              Активировать
+            </button>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("block")}
+              disabled={batchLoading}
+            >
+              Заблокировать
+            </button>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("api-on")}
+              disabled={batchLoading}
+            >
+              API On
+            </button>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("api-off")}
+              disabled={batchLoading}
+            >
+              API Off
+            </button>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("basic")}
+              disabled={batchLoading}
+            >
+              План Basic
+            </button>
+            <button
+              type="button"
+              className="pl1-btn-outline"
+              onClick={() => void applyBatch("pro")}
+              disabled={batchLoading}
+            >
+              План Pro
+            </button>
+          </div>
+        )}
         <table className="pl1-table">
           <thead>
             <tr>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={
+                    filteredTenants.length > 0 &&
+                    filteredTenants.every((t) => selectedIds.has(t.id))
+                  }
+                  onChange={toggleSelectAll}
+                />
+              </th>
               <th>Название</th>
               <th>CLIENT KEY</th>
               <th>СТАТУС</th>
               <th>ПЛАН</th>
               <th>API</th>
               <th>АКТИВЕН ДО</th>
+              <th>ЗАМЕТКИ</th>
               <th>OWNER</th>
               <th>СОЗДАН</th>
               <th>ОБНОВЛЁН</th>
@@ -364,6 +795,13 @@ const TenantsPage: React.FC = () => {
 
             {filteredTenants.map((t) => (
               <tr key={t.id}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(t.id)}
+                    onChange={() => toggleSelect(t.id)}
+                  />
+                </td>
                 <td>{t.name}</td>
                 <td className="pl1-mono">{t.clientKey}</td>
                 <td>
@@ -391,7 +829,32 @@ const TenantsPage: React.FC = () => {
                     {t.apiEnabled ? "Вкл" : "Выкл"}
                   </button>
                 </td>
-                <td>{formatDate(t.activeUntil)}</td>
+                <td>
+                  <div className="flex flex-col gap-1">
+                    <span>{formatDate(t.activeUntil)}</span>
+                    {(() => {
+                      const days = daysToExpire(t.activeUntil);
+                      if (days === null || days > 30) return null;
+                      if (days < 0) {
+                        return (
+                          <span className="pl1-pill pl1-pill-red">
+                            Просрочен
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="pl1-pill pl1-pill-gray">
+                          {`Осталось ${days} д.`}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                </td>
+                <td className="max-w-[220px]">
+                  <div className="truncate text-sm text-slate-200">
+                    {t.notes || "—"}
+                  </div>
+                </td>
                 <td>
                   {t.ownerName || "—"}
                   {t.ownerEmail && (
@@ -407,6 +870,14 @@ const TenantsPage: React.FC = () => {
                   onClick={() => openEditModal(t)}
                 >
                   Редактировать
+                </button>
+
+                <button
+                  type="button"
+                  className="pl1-link-button"
+                  onClick={() => (window.location.href = `/tenants/${t.id}`)}
+                >
+                  Детали / логи
                 </button>
 
                 <button
@@ -675,6 +1146,20 @@ const TenantsPage: React.FC = () => {
                 />
               </label>
 
+              <label className="pl1-field">
+                <span>Внутренние заметки</span>
+                <textarea
+                  className="pl1-input"
+                  rows={3}
+                  value={editForm.notes}
+                  onChange={(e) =>
+                    setEditForm((f) =>
+                      f ? { ...f, notes: e.target.value } : f
+                    )
+                  }
+                />
+              </label>
+
               <label className="pl1-field pl1-field-inline">
                 <span>API доступ</span>
                 <label className="pl1-switch">
@@ -711,6 +1196,53 @@ const TenantsPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- МОДАЛ ИМПОРТА ---------- */}
+      {importOpen && (
+        <div
+          className="pl1-modal-backdrop"
+          onClick={() => !importLoading && setImportOpen(false)}
+        >
+          <div className="pl1-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="pl1-modal-title">Импорт CSV</h2>
+            <p className="pl1-modal-subtitle">
+              Формат: первая строка — заголовки. Обязательные поля: name,
+              clientKey, ownerEmail. Опционально: plan, activeUntil, ownerName,
+              notes. Разделитель — запятая.
+            </p>
+            <textarea
+              className="pl1-input"
+              rows={10}
+              placeholder='name,clientKey,plan,ownerEmail\n"Demo","demo-1","basic","owner@demo.com"'
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+            />
+            {importResult && (
+              <div className="pl1-alert pl1-alert-error mt-2">
+                <span className="pl1-alert-badge">INFO</span>
+                <span>{importResult}</span>
+              </div>
+            )}
+            <div className="pl1-modal-actions">
+              <button
+                type="button"
+                className="pl1-btn-ghost"
+                onClick={() => !importLoading && setImportOpen(false)}
+              >
+                Закрыть
+              </button>
+              <button
+                type="button"
+                className="pl1-btn-primary"
+                onClick={() => void handleImport()}
+                disabled={importLoading}
+              >
+                {importLoading ? "Импортируем…" : "Импортировать"}
+              </button>
+            </div>
           </div>
         </div>
       )}
